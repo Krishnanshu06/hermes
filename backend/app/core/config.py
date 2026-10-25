@@ -3,7 +3,6 @@ from typing import Optional
 import os
 from pathlib import Path
 
-# Load from project root .env if running from root or backend/
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
 class Settings(BaseSettings):
@@ -14,10 +13,16 @@ class Settings(BaseSettings):
     
     JWT_SECRET: str = "super_secret_jwt_key_default"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 days
     
     FRONTEND_URL: str = "http://localhost:3000"
     BACKEND_URL: str = "http://localhost:8000"
+    
+    # Gatekeeper Access Code for AI features
+    AI_ACCESS_CODE: str = "kekuCode"
+    
+    # Database path
+    DB_PATH: str = str(Path(__file__).resolve().parent.parent / "hermes.db")
 
     class Config:
         env_file = [

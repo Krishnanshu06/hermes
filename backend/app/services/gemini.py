@@ -1,6 +1,8 @@
 import json
 import logging
-from typing import Dict, Any, List
+import re
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 from app.core.config import settings
 
@@ -10,7 +12,6 @@ class GeminiService:
     def __init__(self):
         if settings.GEMINI_API_KEY:
             genai.configure(api_key=settings.GEMINI_API_KEY)
-            # Use gemini-1.5-flash or gemini-2.0-flash / default available
             self.model = genai.GenerativeModel(
                 model_name="gemini-1.5-flash",
                 generation_config={"response_mime_type": "application/json"}
@@ -18,50 +19,63 @@ class GeminiService:
         else:
             self.model = None
 
-    def analyze_email(self, subject: str, sender: str, snippet: str, body: str) -> Dict[str, Any]:
+    def analyze_email(self, subject: str, sender: str, snippet: str, body: str, email_date: str = "") -> Dict[str, Any]:
         """
-        Analyzes an email to:
-        1. Categorize: 'Action Required', 'Follow-up', 'Newsletter', 'Spam/Promotions', 'FYI/Informational'
-        2. Priority: 'High', 'Medium', 'Low'
-        3. Extract Actionable Tasks with due dates / urgency
-        4. Provide a 1-sentence executive summary
-        5. Suggest a recommended quick reply
+        Specialized classification tailored to user requirements:
+        Categories:
+        - 'Internship/Job' (employer/recruiter emails, offers, rejections, interview invites, tech applications)
+        - 'Competition/Hackathon' (coding contests, datathons, case competitions, hackathons)
+        - 'Event/Academic' (school lectures, campus seminars, workshops, meetups, academic announcements)
+        - 'Action Required' (bills, urgent deadlines, signatures, critical responses)
+        - 'Promotion/Spam' (marketing flyers, store discounts, junk newsletters)
+        - 'FYI/General' (social updates, general notifications)
         """
         if not self.model:
-            return {
-                "category": "FYI/Informational",
-                "priority": "Medium",
-                "summary": snippet[:100],
-                "tasks": [],
-                "suggested_reply": ""
-            }
+            return self._fallback_classification(subject, snippet)
+
+        # Truncate body to save tokens and prevent exceeding context
+        clean_body = body[:2500] if body else snippet[:1000]
 
         prompt = f"""
-You are Hermes, an intelligent executive email organizer assistant.
-Analyze the following email and return a valid JSON object matching the schema below.
+You are Hermes, an intelligent student and engineer email organizer.
+Current Date: {datetime.now().strftime('%Y-%m-%d')}
+Email Received Date: {email_date}
+Subject: {subject}
+Sender: {sender}
+Snippet: {snippet}
+Content:
+{clean_body}
 
-Email Details:
-- Subject: {subject}
-- Sender: {sender}
-- Snippet: {snippet}
-- Content: {body[:3000]}
+Instructions:
+1. Categorize into EXACTLY one of:
+   - "Internship/Job" (employers, recruiter notes, interview invites, application confirmations, internships)
+   - "Competition/Hackathon" (hackathons, code battles, coding competitions, scholarships, project challenges)
+   - "Event/Academic" (university/school campus alerts, course notices, seminars, guest talks)
+   - "Action Required" (urgent personal to-dos, bills, forms to sign)
+   - "Promotion/Spam" (trash, generic marketing newsletters, promotional discounts)
+   - "FYI/General" (receipts, notifications, updates not needing action)
+2. Determine Priority: "High", "Medium", or "Low"
+3. Identify relevant event_date (YYYY-MM-DD format) for a calendar if there is a deadline, interview date, competition date, or event time mentioned. If none mentioned, return null.
+4. Provide a 1-sentence crystal clear executive summary.
+5. Extract action items / tasks with deadlines if any.
+6. Suggest a 1-2 sentence professional quick reply draft (or null if spam/promotion).
 
-Response Schema (JSON):
+Schema:
 {{
-  "category": "Action Required" | "Follow-up" | "Newsletter" | "Spam/Promotions" | "FYI/Informational",
+  "category": "Internship/Job" | "Competition/Hackathon" | "Event/Academic" | "Action Required" | "Promotion/Spam" | "FYI/General",
   "priority": "High" | "Medium" | "Low",
-  "summary": "1 or 2 sentence concise executive summary",
+  "event_date": "YYYY-MM-DD" or null,
+  "summary": "Concise 1-sentence summary",
   "tasks": [
     {{
-      "title": "Clear task description",
-      "deadline": "Extracted date or null if not mentioned",
+      "title": "Task title",
+      "deadline": "Extracted date or null",
       "urgency": "High" | "Medium" | "Low"
     }}
   ],
-  "suggested_reply": "Brief helpful response draft or null"
+  "suggested_reply": "Brief draft or null"
 }}
-
-Strictly output only the raw JSON.
+Return strictly valid JSON only.
 """
         try:
             response = self.model.generate_content(prompt)
@@ -69,12 +83,33 @@ Strictly output only the raw JSON.
             return result
         except Exception as e:
             logger.error(f"Error calling Gemini AI: {e}")
-            return {
-                "category": "FYI/Informational",
-                "priority": "Medium",
-                "summary": snippet or subject,
-                "tasks": [],
-                "suggested_reply": ""
-            }
+            return self._fallback_classification(subject, snippet)
+
+    def _fallback_classification(self, subject: str, snippet: str) -> Dict[str, Any]:
+        text = f"{subject} {snippet}".lower()
+        if any(w in text for w in ["interview", "application", "internship", "offer", "recruiter", "careers"]):
+            category = "Internship/Job"
+            priority = "High"
+        elif any(w in text for w in ["hackathon", "competition", "contest", "challenge", "devpost"]):
+            category = "Competition/Hackathon"
+            priority = "High"
+        elif any(w in text for w in ["assignment", "lecture", "exam", "course", "campus", "professor", "university"]):
+            category = "Event/Academic"
+            priority = "Medium"
+        elif any(w in text for w in ["sale", "discount", "off", "unsubscribe", "deal", "promo"]):
+            category = "Promotion/Spam"
+            priority = "Low"
+        else:
+            category = "FYI/General"
+            priority = "Medium"
+
+        return {
+            "category": category,
+            "priority": priority,
+            "event_date": None,
+            "summary": snippet[:150] or subject,
+            "tasks": [],
+            "suggested_reply": None
+        }
 
 gemini_service = GeminiService()

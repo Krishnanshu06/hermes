@@ -4,7 +4,6 @@ from googleapiclient.discovery import build
 from typing import Dict, Any, List, Optional
 import base64
 import email
-from bs4 import BeautifulSoup
 from app.core.config import settings
 
 SCOPES = [
@@ -48,12 +47,11 @@ class GmailService:
     def get_user_profile(self) -> Dict[str, Any]:
         return self.service.users().getProfile(userId="me").execute()
 
-    def list_messages(self, max_results: int = 20, query: str = "") -> List[Dict[str, Any]]:
+    def list_messages(self, max_results: int = 30, query: str = "") -> List[Dict[str, Any]]:
         results = self.service.users().messages().list(
             userId="me", maxResults=max_results, q=query
         ).execute()
-        messages = results.get("messages", [])
-        return messages
+        return results.get("messages", [])
 
     def get_message_detail(self, message_id: str) -> Dict[str, Any]:
         msg = self.service.users().messages().get(
@@ -69,7 +67,6 @@ class GmailService:
         to = header_dict.get("to", "")
         date = header_dict.get("date", "")
 
-        # Extract email body
         body = self._extract_body(payload)
 
         return {
@@ -95,8 +92,11 @@ class GmailService:
                     if mime_type == "text/plain":
                         return text
                     elif mime_type == "text/html" and not body:
-                        # Fallback or stripped HTML
                         body = text
+                if "parts" in part:
+                    sub = self._extract_body(part)
+                    if sub:
+                        return sub
         elif "body" in payload and payload["body"].get("data"):
             data = payload["body"]["data"]
             body = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
