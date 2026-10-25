@@ -1,39 +1,55 @@
+import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 import google.oauth2.credentials
-from app.services.gmail import get_oauth_flow, GmailService
+from app.services.gmail import get_oauth_flow, GmailService, SCOPES
 from app.core.security import create_access_token, decode_access_token
 from app.core.config import settings
 from app.core.db import upsert_account, get_all_accounts, get_account, delete_account
+from urllib.parse import urlencode
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/login")
 def login():
-    """Generates Google OAuth URL with prompt=select_account so user can easily add personal or school account."""
-    flow = get_oauth_flow()
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="select_account"
-    )
+    """Generates standard Google OAuth 2.0 authorization URL."""
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "select_account",
+        "include_granted_scopes": "true"
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return {"url": auth_url}
 
 @router.get("/callback")
 def oauth_callback(code: str):
-    """Handles OAuth redirect callback, stores multi-account details into SQLite, and returns JWT."""
+    """Exchanges authorization code directly via Google token endpoint without PKCE verifier mismatch."""
     try:
-        flow = get_oauth_flow()
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code"
+        }
+        resp = requests.post(token_url, data=data)
+        token_data = resp.json()
+
+        if "error" in token_data:
+            raise Exception(f"{token_data.get('error')}: {token_data.get('error_description')}")
 
         token_info = {
-            "access_token": credentials.token,
-            "refresh_token": credentials.refresh_token,
-            "token_uri": credentials.token_uri,
-            "client_id": credentials.client_id,
-            "client_secret": credentials.client_secret,
-            "scopes": credentials.scopes
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token"),
+            "token_uri": token_url,
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "scopes": token_data.get("scope", "").split(" ")
         }
 
         gmail_svc = GmailService(token_info)
