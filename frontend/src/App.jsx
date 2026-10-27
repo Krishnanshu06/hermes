@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import DOMPurify from 'dompurify';
 import {
   Calendar as CalendarIcon,
   Mail,
@@ -10,10 +11,6 @@ import {
   RefreshCw,
   Search,
   Plus,
-  Briefcase,
-  Trophy,
-  GraduationCap,
-  Bell,
   Trash2,
   X,
   ExternalLink,
@@ -27,7 +24,10 @@ import {
   Star,
   Bookmark,
   Check,
-  Edit2
+  Link,
+  CalendarDays,
+  ListChecks,
+  Code
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -46,8 +46,9 @@ export default function App() {
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [categoryModal, setCategoryModal] = useState(null); // { id, label, description, color }
-  const [confirmDelete, setConfirmDelete] = useState(null); // { type: 'single' | 'category', id, name }
+  const [categoryModal, setCategoryModal] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [viewHtmlMode, setViewHtmlMode] = useState(true); // Toggle HTML vs Plain Text in Email Viewer
 
   // Data states
   const [emails, setEmails] = useState([]);
@@ -151,7 +152,6 @@ export default function App() {
     }
   };
 
-  // Star & Interested flags toggle
   const toggleStar = async (email, e) => {
     if (e) e.stopPropagation();
     const newStar = !email.is_starred;
@@ -180,7 +180,6 @@ export default function App() {
     }
   };
 
-  // Reassign Category
   const reassignCategory = async (emailId, newCategory) => {
     try {
       await axios.patch(`${API_BASE}/emails/${emailId}/flags`, { category: newCategory });
@@ -193,7 +192,6 @@ export default function App() {
     }
   };
 
-  // Delete Handlers
   const executeDelete = async () => {
     if (!confirmDelete) return;
     try {
@@ -211,7 +209,6 @@ export default function App() {
     }
   };
 
-  // Save Category
   const saveCategory = async () => {
     if (!categoryModal || !categoryModal.label.trim()) return;
     try {
@@ -229,18 +226,6 @@ export default function App() {
     }
   };
 
-  const removeCategory = async (catId) => {
-    if (!window.confirm(`Delete category "${catId}"? Associated emails will move to FYI/General.`)) return;
-    try {
-      await axios.delete(`${API_BASE}/emails/categories/${encodeURIComponent(catId)}`);
-      await fetchCategories();
-      await fetchEmails();
-    } catch (err) {
-      alert('Failed to delete category');
-    }
-  };
-
-  // Save Settings
   const saveRetentionSettings = async (days) => {
     try {
       const res = await axios.post(`${API_BASE}/emails/settings`, { retention_days: parseInt(days) });
@@ -283,16 +268,22 @@ export default function App() {
     );
   };
 
+  // Group emails on the calendar:
+  // IF email has an event_date (deadline / competition / event date), place tile on THAT day!
+  // Otherwise fall back to received date
   const eventsByDate = useMemo(() => {
     const map = {};
     emails.forEach(email => {
-      let targetDateStr = email.event_date;
-      if (!targetDateStr && email.date_str) {
+      let targetDateStr = null;
+      if (email.event_date && /^\d{4}-\d{2}-\d{2}$/.test(email.event_date.trim())) {
+        targetDateStr = email.event_date.trim();
+      } else if (email.date_str) {
         const parsed = new Date(email.date_str);
         if (!isNaN(parsed.getTime())) {
           targetDateStr = parsed.toISOString().split('T')[0];
         }
       }
+
       if (targetDateStr) {
         if (!map[targetDateStr]) map[targetDateStr] = [];
         map[targetDateStr].push(email);
@@ -342,7 +333,7 @@ export default function App() {
             {syncMessage && <span style={styles.syncMiniMessage}>{syncMessage}</span>}
           </div>
 
-          {/* Special Categories: Starred & Interested */}
+          {/* Starred & Interested Filters */}
           <div style={{ ...styles.sideSection, paddingBottom: 8 }}>
             <div style={styles.categoriesList}>
               <button
@@ -408,7 +399,6 @@ export default function App() {
                       <span style={{ ...styles.catIndicator, backgroundColor: cat.color }} />
                       <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>{cat.label}</span>
                     </button>
-                    {/* Delete category emails action */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -500,14 +490,12 @@ export default function App() {
 
         {/* Full-Screen Grid Container */}
         <div style={styles.calendarFullGrid}>
-          {/* Weekday Row */}
           <div style={styles.weekDaysGrid}>
             {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map(d => (
               <div key={d} style={styles.weekDayHeader}>{d}</div>
             ))}
           </div>
 
-          {/* Calendar Cells */}
           <div style={styles.daysGrid}>
             {Array.from({ length: firstDayIndex }).map((_, i) => (
               <div key={`empty-${i}`} style={styles.emptyDayCell} />
@@ -539,6 +527,7 @@ export default function App() {
                   <div style={styles.dayEventsList}>
                     {dayEmails.slice(0, 4).map((email) => {
                       const col = getCategoryColor(email.category);
+                      const isDeadlineTile = email.event_date === dateKey;
                       return (
                         <div
                           key={email.id}
@@ -548,11 +537,13 @@ export default function App() {
                           }}
                           style={{
                             ...styles.dayEventPill,
-                            borderLeftColor: col
+                            borderLeftColor: col,
+                            backgroundColor: isDeadlineTile ? `${col}15` : 'rgba(255, 255, 255, 0.03)'
                           }}
-                          title={`${email.subject} (Click to read)`}
+                          title={`${email.subject}${isDeadlineTile ? ' (Deadline/Event Day)' : ''}`}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+                            {isDeadlineTile && <Clock size={10} color={col} />}
                             {email.is_starred && <Star size={10} color="#facc15" fill="#facc15" />}
                             {email.is_interested && <Bookmark size={10} color="#38bdf8" fill="#38bdf8" />}
                             <span style={styles.dayEventTitle}>{email.subject || 'No Subject'}</span>
@@ -596,6 +587,7 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {selectedDayEmails.map((email) => {
                     const col = getCategoryColor(email.category);
+                    const isDeadline = email.event_date === dayModalDate;
                     return (
                       <div
                         key={email.id}
@@ -606,9 +598,16 @@ export default function App() {
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <span style={{ ...styles.categoryBadge, backgroundColor: `${col}18`, color: col }}>
-                            {email.category || 'General'}
-                          </span>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <span style={{ ...styles.categoryBadge, backgroundColor: `${col}18`, color: col }}>
+                              {email.category || 'General'}
+                            </span>
+                            {isDeadline && (
+                              <span style={{ ...styles.categoryBadge, backgroundColor: 'rgba(248, 113, 113, 0.15)', color: '#f87171' }}>
+                                Due / Event Day
+                              </span>
+                            )}
+                          </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <button
                               onClick={(e) => toggleStar(email, e)}
@@ -659,10 +658,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Full Content Email Modal Popup */}
+      {/* Full Content Email Modal Popup with Rich HTML Rendering & Extracted Details */}
       {emailModal && (
         <div style={styles.modalBackdrop} onClick={() => setEmailModal(null)}>
-          <div style={{ ...styles.modalCard, maxWidth: '780px', maxHeight: '88vh' }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...styles.modalCard, maxWidth: '840px', maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
             <div style={styles.modalHead}>
               <div style={{ flex: 1, paddingRight: 16 }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fafafa', lineHeight: 1.3 }}>
@@ -721,28 +720,101 @@ export default function App() {
                     <option key={c.id} value={c.id}>{c.label}</option>
                   ))}
                 </select>
+                {emailModal.event_date && (
+                  <span style={{ fontSize: '0.75rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                    <CalendarDays size={13} /> Deadline / Event: <strong>{emailModal.event_date}</strong>
+                  </span>
+                )}
               </div>
 
-              {/* Executive Summary Card */}
-              {emailModal.summary && (
-                <div style={styles.aiInsightBox}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#fafafa', fontSize: '0.8rem' }}>
-                      <Sparkles size={13} /> Executive Summary
-                    </span>
-                    <span style={{ ...styles.categoryBadge, backgroundColor: `${getCategoryColor(emailModal.category)}18`, color: getCategoryColor(emailModal.category) }}>
-                      {emailModal.category} &bull; {emailModal.priority || 'Medium'} Priority
-                    </span>
-                  </div>
-                  <p style={{ fontSize: '0.85rem', color: '#d4d4d8', lineHeight: 1.5 }}>
-                    {emailModal.summary}
-                  </p>
+              {/* Intelligence Summary & Highlights */}
+              <div style={styles.aiInsightBox}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#fafafa', fontSize: '0.82rem' }}>
+                    <Sparkles size={13} /> Executive Summary
+                  </span>
+                  <span style={{ ...styles.categoryBadge, backgroundColor: `${getCategoryColor(emailModal.category)}18`, color: getCategoryColor(emailModal.category) }}>
+                    {emailModal.category} &bull; {emailModal.priority || 'Medium'} Priority
+                  </span>
                 </div>
-              )}
+                <p style={{ fontSize: '0.86rem', color: '#e4e4e7', lineHeight: 1.5, margin: 0 }}>
+                  {emailModal.summary || emailModal.snippet}
+                </p>
 
-              {/* Entire Content Preview */}
-              <div style={styles.emailBodyPreview}>
-                {emailModal.body || emailModal.snippet || '(No content available)'}
+                {/* Key Details extracted by AI */}
+                {emailModal.key_details && emailModal.key_details.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={styles.subBlockLabel}>Key Details</span>
+                    <ul style={styles.detailBullets}>
+                      {emailModal.key_details.map((point, idx) => (
+                        <li key={idx}>{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Extracted Actionable Links */}
+                {emailModal.important_links && emailModal.important_links.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={styles.subBlockLabel}>Important Action Links</span>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                      {emailModal.important_links.map((linkObj, idx) => (
+                        <a
+                          key={idx}
+                          href={linkObj.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={styles.actionPillLink}
+                        >
+                          <Link size={12} /> {linkObj.label || 'Link'}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Extracted Important Dates */}
+                {emailModal.important_dates && emailModal.important_dates.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={styles.subBlockLabel}>Key Dates & Deadlines</span>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                      {emailModal.important_dates.map((dt, idx) => (
+                        <span key={idx} style={styles.datePill}>
+                          <Clock size={11} /> {dt}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Email Content Header with Render Mode Switcher */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                <span style={{ fontSize: '0.78rem', color: '#71717a', fontWeight: 600, textTransform: 'uppercase' }}>
+                  Full Message Content
+                </span>
+                <button
+                  onClick={() => setViewHtmlMode(!viewHtmlMode)}
+                  style={styles.toggleRenderBtn}
+                >
+                  <Code size={13} /> {viewHtmlMode ? 'View Plain Text' : 'View Formatted HTML'}
+                </button>
+              </div>
+
+              {/* Email Body Rendering */}
+              <div style={styles.emailContentContainer}>
+                {viewHtmlMode ? (
+                  <div
+                    style={styles.sanitizedHtmlWrapper}
+                    dangerouslySetInnerHTML={{
+                      __html: DOMPurify.sanitize(emailModal.body || emailModal.snippet || '(No content)')
+                    }}
+                  />
+                ) : (
+                  <pre style={styles.plainTextPre}>
+                    {emailModal.plain_text || emailModal.body || emailModal.snippet || '(No content)'}
+                  </pre>
+                )}
               </div>
             </div>
           </div>
@@ -793,7 +865,6 @@ export default function App() {
             </div>
 
             <div style={{ ...styles.modalBody, display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* Retention Setting */}
               <div>
                 <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fafafa', marginBottom: 4 }}>
                   Auto-Delete Retention
@@ -817,7 +888,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Manage Categories */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fafafa' }}>
@@ -986,8 +1056,7 @@ const styles = {
     borderRadius: '6px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    transition: 'color 0.15s ease'
+    justifyContent: 'center'
   },
   syncBox: {
     padding: '12px 0',
@@ -1254,7 +1323,6 @@ const styles = {
     padding: '3px 6px',
     borderRadius: '4px',
     borderLeft: '2px solid',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -1396,18 +1464,77 @@ const styles = {
     borderRadius: 'var(--radius-md)',
     padding: '14px'
   },
-  emailBodyPreview: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    border: '1px solid var(--card-border)',
-    borderRadius: 'var(--radius-md)',
-    padding: '14px',
-    fontSize: '0.85rem',
-    lineHeight: 1.6,
+  subBlockLabel: {
+    display: 'block',
+    fontSize: '0.72rem',
+    fontWeight: 600,
+    color: '#a1a1aa',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '4px'
+  },
+  detailBullets: {
+    margin: '4px 0 0',
+    paddingLeft: '16px',
+    fontSize: '0.82rem',
     color: '#d4d4d8',
+    lineHeight: 1.5
+  },
+  actionPillLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '4px 10px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    color: '#fff',
+    fontSize: '0.75rem',
+    textDecoration: 'none',
+    fontWeight: 500
+  },
+  datePill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '3px 8px',
+    borderRadius: '4px',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    color: '#38bdf8',
+    fontSize: '0.74rem',
+    fontWeight: 500
+  },
+  toggleRenderBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    background: 'none',
+    border: 'none',
+    color: '#a1a1aa',
+    fontSize: '0.74rem',
+    cursor: 'pointer'
+  },
+  emailContentContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 'var(--radius-md)',
+    padding: '16px',
+    color: '#18181b',
+    maxHeight: '450px',
+    overflowY: 'auto'
+  },
+  sanitizedHtmlWrapper: {
+    fontSize: '0.88rem',
+    lineHeight: 1.6,
+    wordBreak: 'break-word',
+    overflowX: 'auto'
+  },
+  plainTextPre: {
+    fontFamily: 'inherit',
+    fontSize: '0.84rem',
+    lineHeight: 1.6,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
-    maxHeight: '420px',
-    overflowY: 'auto'
+    margin: 0
   },
   cancelBtn: {
     padding: '6px 14px',

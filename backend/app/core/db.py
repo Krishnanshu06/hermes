@@ -88,6 +88,7 @@ def init_db():
                 summary TEXT,
                 suggested_reply TEXT,
                 tasks_json TEXT,
+                metadata_json TEXT,
                 event_date TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -151,6 +152,7 @@ def init_db():
                 summary TEXT,
                 suggested_reply TEXT,
                 tasks_json TEXT,
+                metadata_json TEXT,
                 event_date TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (account_email) REFERENCES accounts(email)
@@ -411,14 +413,19 @@ def save_email(email_data: dict, account_email: str, analysis: Optional[dict] = 
     summ = analysis.get("summary") if analysis else None
     sug_reply = analysis.get("suggested_reply") if analysis else None
     tasks_j = json.dumps(analysis.get("tasks", [])) if analysis else None
+    meta_j = json.dumps({
+        "key_details": analysis.get("key_details", []),
+        "important_links": analysis.get("important_links", []),
+        "important_dates": analysis.get("important_dates", [])
+    }) if analysis else None
     ev_date = analysis.get("event_date") if analysis else None
 
     query = f"""
     INSERT INTO emails (
         id, account_email, thread_id, subject, sender, recipient,
         date_str, snippet, body, label_ids,
-        analyzed, category, priority, summary, suggested_reply, tasks_json, event_date
-    ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+        analyzed, category, priority, summary, suggested_reply, tasks_json, metadata_json, event_date
+    ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
     ON CONFLICT(id) DO UPDATE SET
         subject = excluded.subject,
         sender = excluded.sender,
@@ -431,6 +438,7 @@ def save_email(email_data: dict, account_email: str, analysis: Optional[dict] = 
         summary = COALESCE(excluded.summary, emails.summary),
         suggested_reply = COALESCE(excluded.suggested_reply, emails.suggested_reply),
         tasks_json = COALESCE(excluded.tasks_json, emails.tasks_json),
+        metadata_json = COALESCE(excluded.metadata_json, emails.metadata_json),
         event_date = COALESCE(excluded.event_date, emails.event_date)
     """
     params = (
@@ -450,6 +458,7 @@ def save_email(email_data: dict, account_email: str, analysis: Optional[dict] = 
         summ,
         sug_reply,
         tasks_j,
+        meta_j,
         ev_date
     )
     cursor.execute(query, params)
@@ -501,6 +510,10 @@ def get_cached_emails(
     for r in rows:
         d = dict(r)
         d["tasks"] = json.loads(d["tasks_json"]) if d.get("tasks_json") else []
+        meta = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
+        d["key_details"] = meta.get("key_details", [])
+        d["important_links"] = meta.get("important_links", [])
+        d["important_dates"] = meta.get("important_dates", [])
         d["labelIds"] = json.loads(d["label_ids"]) if d.get("label_ids") else []
         d["is_starred"] = bool(d.get("is_starred"))
         d["is_interested"] = bool(d.get("is_interested"))
@@ -520,6 +533,10 @@ def get_email_by_id(email_id: str) -> Optional[Dict[str, Any]]:
         return None
     d = dict(row)
     d["tasks"] = json.loads(d["tasks_json"]) if d.get("tasks_json") else []
+    meta = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
+    d["key_details"] = meta.get("key_details", [])
+    d["important_links"] = meta.get("important_links", [])
+    d["important_dates"] = meta.get("important_dates", [])
     d["labelIds"] = json.loads(d["label_ids"]) if d.get("label_ids") else []
     d["is_starred"] = bool(d.get("is_starred"))
     d["is_interested"] = bool(d.get("is_interested"))

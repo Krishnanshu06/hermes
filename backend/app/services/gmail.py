@@ -3,7 +3,6 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from typing import Dict, Any, List, Optional
 import base64
-import email
 from app.core.config import settings
 
 SCOPES = [
@@ -67,7 +66,9 @@ class GmailService:
         to = header_dict.get("to", "")
         date = header_dict.get("date", "")
 
-        body = self._extract_body(payload)
+        plain_text, html_body = self._extract_bodies(payload)
+        # Prefer html_body for full rendering, fallback to plain_text
+        primary_body = html_body if html_body else plain_text
 
         return {
             "id": msg["id"],
@@ -77,31 +78,42 @@ class GmailService:
             "to": to,
             "date": date,
             "snippet": msg.get("snippet", ""),
-            "body": body,
+            "body": primary_body,
+            "plain_text": plain_text,
             "labelIds": msg.get("labelIds", [])
         }
 
-    def _extract_body(self, payload: dict) -> str:
-        body = ""
+    def _extract_bodies(self, payload: dict) -> tuple:
+        plain_text = ""
+        html_body = ""
+
         if "parts" in payload:
             for part in payload["parts"]:
+                sub_plain, sub_html = self._extract_bodies(part)
+                if sub_plain and not plain_text:
+                    plain_text = sub_plain
+                if sub_html and not html_body:
+                    html_body = sub_html
+                
                 mime_type = part.get("mimeType", "")
                 data = part.get("body", {}).get("data")
                 if data:
                     text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-                    if mime_type == "text/plain":
-                        return text
-                    elif mime_type == "text/html" and not body:
-                        body = text
-                if "parts" in part:
-                    sub = self._extract_body(part)
-                    if sub:
-                        return sub
+                    if mime_type == "text/plain" and not plain_text:
+                        plain_text = text
+                    elif mime_type == "text/html" and not html_body:
+                        html_body = text
+
         elif "body" in payload and payload["body"].get("data"):
             data = payload["body"]["data"]
-            body = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            
-        return body
+            text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+            mime_type = payload.get("mimeType", "")
+            if mime_type == "text/html":
+                html_body = text
+            else:
+                plain_text = text
+
+        return plain_text, html_body
 
     def list_labels(self) -> List[Dict[str, Any]]:
         res = self.service.users().labels().list(userId="me").execute()
