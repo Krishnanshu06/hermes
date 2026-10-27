@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, Header
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from typing import Optional, List
 from app.api.auth import get_current_user_account
 from app.services.gmail import GmailService
@@ -10,7 +10,8 @@ from app.core.db import (
     get_cached_emails,
     get_email_by_id,
     get_account,
-    get_all_accounts
+    get_all_accounts,
+    update_account_sync_time
 )
 from pydantic import BaseModel
 import json
@@ -27,29 +28,19 @@ class LabelUpdateRequest(BaseModel):
 
 class SyncRequest(BaseModel):
     account_email: Optional[str] = None
-    max_results: int = 25
-
-class AnalyzeRequest(BaseModel):
-    access_code: str
-
-def verify_access_code(code: str):
-    if code != settings.AI_ACCESS_CODE:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid Access Code. Enter 'kekuCode' to use Hermes AI features."
-        )
+    max_results: int = 20
 
 @router.get("/")
 def get_emails(
     account_email: Optional[str] = Query("all", description="Filter by account email or 'all'"),
     category: Optional[str] = Query("all", description="Filter by category or 'all'"),
     q: Optional[str] = Query("", description="Full text search for keywords, employers, competitions"),
-    limit: int = Query(100, ge=1, le=250),
-    current_acc: dict = Depends(get_current_user_account)
+    limit: int = Query(200, ge=1, le=500),
+    current_acc: Optional[dict] = Depends(get_current_user_account)
 ):
     """
-    Returns cached emails from SQLite database. Token efficient: does not re-invoke LLM.
-    Supports filtering by connected account (school/personal), category, and keyword search.
+    Returns cached emails from SQLite database.
+    Zero token cost: Reads directly from local DB without calling LLM or Gmail API.
     """
     cached = get_cached_emails(
         account_email=account_email,
@@ -62,9 +53,9 @@ def get_emails(
 @router.get("/{message_id}")
 def get_email_detail(
     message_id: str,
-    current_acc: dict = Depends(get_current_user_account)
+    current_acc: Optional[dict] = Depends(get_current_user_account)
 ):
-    """Fetches full cached email details from SQLite."""
+    """Fetches full email details from SQLite."""
     email_data = get_email_by_id(message_id)
     if not email_data:
         raise HTTPException(status_code=404, detail="Email not found")
@@ -73,13 +64,15 @@ def get_email_detail(
 @router.post("/sync")
 def sync_inbox(
     req: SyncRequest,
-    current_acc: dict = Depends(get_current_user_account)
+    current_acc: Optional[dict] = Depends(get_current_user_account)
 ):
     """
-    Fetches latest emails from Gmail API and saves them into the local SQLite DB.
-    Does NOT invoke LLM here to preserve tokens.
+    Incremental Sync:
+    1. Fetches only new emails that aren't already in the database.
+    2. Runs Gemini IMMEDIATELY upon fetching to summarize, categorize, and extract events/tasks.
+    3. Permanently caches both email and Gemini analysis into SQLite.
+    4. Never re-analyzes already stored emails (conserves all tokens).
     """
-    # Determine which accounts to sync
     accounts_to_sync = []
     if req.account_email and req.account_email != "all":
         acc = get_account(req.account_email)
@@ -88,7 +81,15 @@ def sync_inbox(
     else:
         accounts_to_sync = [get_account(a["email"]) for a in get_all_accounts()]
 
-    synced_count = 0
+    if not accounts_to_sync and current_acc:
+        accounts_to_sync.append(current_acc)
+
+    if not accounts_to_sync:
+        return {"status": "error", "message": "No connected accounts found. Please connect your Gmail account once."}
+
+    synced_new_count = 0
+    analyzed_new_count = 0
+
     for acc in accounts_to_sync:
         if not acc:
             continue
@@ -103,103 +104,48 @@ def sync_inbox(
             messages = svc.list_messages(max_results=req.max_results, query="label:INBOX")
             
             for m in messages:
-                # Check if already cached
+                # Stop if already in DB to avoid unnecessary fetch & token spend
                 existing = get_email_by_id(m["id"])
                 if existing:
                     continue
+
                 try:
                     detail = svc.get_message_detail(m["id"])
-                    save_email(detail, acc["email"])
-                    synced_count += 1
+                    
+                    # Analyze with Gemini automatically while fetching!
+                    analysis = gemini_service.analyze_email(
+                        subject=detail.get("subject", ""),
+                        sender=detail.get("from", ""),
+                        snippet=detail.get("snippet", ""),
+                        body=detail.get("body", "") or "",
+                        email_date=detail.get("date", "")
+                    )
+                    
+                    # Save both email & Gemini summary into SQLite permanently
+                    save_email(detail, acc["email"], analysis=analysis)
+                    synced_new_count += 1
+                    analyzed_new_count += 1
                 except Exception as ex:
-                    logger.error(f"Error fetching message {m['id']}: {ex}")
+                    logger.error(f"Error fetching/analyzing email {m['id']}: {ex}")
+
+            update_account_sync_time(acc["email"])
         except Exception as e:
             logger.error(f"Error syncing account {acc['email']}: {e}")
 
     return {
         "status": "success",
-        "synced_new_emails": synced_count,
-        "message": f"Successfully pulled {synced_count} new emails into database"
-    }
-
-@router.post("/{message_id}/analyze")
-def analyze_single_email(
-    message_id: str,
-    req: AnalyzeRequest,
-    current_acc: dict = Depends(get_current_user_account)
-):
-    """Analyzes a single email using Gemini AI. Protected by access code 'kekuCode'."""
-    verify_access_code(req.access_code)
-    
-    email_data = get_email_by_id(message_id)
-    if not email_data:
-        raise HTTPException(status_code=404, detail="Email not found")
-        
-    analysis = gemini_service.analyze_email(
-        subject=email_data["subject"],
-        sender=email_data["sender"],
-        snippet=email_data["snippet"],
-        body=email_data["body"] or "",
-        email_date=email_data["date_str"]
-    )
-    
-    update_email_analysis(message_id, analysis, analysis.get("event_date"))
-    updated = get_email_by_id(message_id)
-    return {"id": message_id, "analysis": analysis, "email": updated}
-
-@router.post("/batch-organize")
-def batch_organize_inbox(
-    req: AnalyzeRequest,
-    limit: int = Query(15, ge=1, le=50),
-    account_email: Optional[str] = Query("all"),
-    current_acc: dict = Depends(get_current_user_account)
-):
-    """
-    Processes unanalyzed emails through Gemini AI and permanently saves results to SQLite DB.
-    Protected by access code 'kekuCode'.
-    """
-    verify_access_code(req.access_code)
-    
-    # Grab unanalyzed emails from database first
-    all_emails = get_cached_emails(account_email=account_email, limit=limit)
-    unanalyzed = [e for e in all_emails if not e.get("analyzed")]
-
-    # If all are already analyzed, return cached
-    if not unanalyzed:
-        return {
-            "count": len(all_emails),
-            "analyzed_now": 0,
-            "message": "All emails already analyzed in database (zero tokens consumed)."
-        }
-
-    analyzed_count = 0
-    for e in unanalyzed[:limit]:
-        try:
-            analysis = gemini_service.analyze_email(
-                subject=e["subject"],
-                sender=e["sender"],
-                snippet=e["snippet"],
-                body=e["body"] or "",
-                email_date=e["date_str"]
-            )
-            update_email_analysis(e["id"], analysis, analysis.get("event_date"))
-            analyzed_count += 1
-        except Exception as ex:
-            logger.error(f"Error analyzing email {e['id']}: {ex}")
-
-    return {
-        "count": len(all_emails),
-        "analyzed_now": analyzed_count,
-        "message": f"Successfully analyzed {analyzed_count} emails with Gemini and cached in SQLite."
+        "synced_new_emails": synced_new_count,
+        "analyzed_emails": analyzed_new_count,
+        "message": f"Successfully pulled and AI-analyzed {synced_new_count} new emails. All cached permanently."
     }
 
 @router.post("/{message_id}/labels")
 def update_email_labels(
     message_id: str,
     req: LabelUpdateRequest,
-    current_acc: dict = Depends(get_current_user_account)
+    current_acc: Optional[dict] = Depends(get_current_user_account)
 ):
-    """Updates labels on Gmail and local DB."""
+    """Updates labels on Gmail."""
     email_data = get_email_by_id(message_id)
     if not email_data:
         raise HTTPException(status_code=404, detail="Email not found")

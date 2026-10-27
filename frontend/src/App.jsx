@@ -5,14 +5,10 @@ import {
   Mail,
   Sparkles,
   Clock,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   RefreshCw,
-  LogOut,
-  AlertTriangle,
   Search,
-  KeyRound,
   Plus,
   Briefcase,
   Trophy,
@@ -21,14 +17,14 @@ import {
   Trash2,
   X,
   ExternalLink,
-  Check,
-  Filter,
-  UserCheck
+  AlertTriangle,
+  ArrowUpRight,
+  Inbox,
+  CheckCircle2
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// Categorization Definitions & Color Codes
 export const CATEGORIES = [
   { id: 'all', label: 'All Categories', color: '#94a3b8' },
   { id: 'Internship/Job', label: 'Internships & Jobs', color: '#38bdf8', icon: Briefcase },
@@ -45,30 +41,21 @@ export default function App() {
   const [selectedAccount, setSelectedAccount] = useState('all');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [accessCode, setAccessCode] = useState(localStorage.getItem('hermes_access_code') || 'kekuCode');
-  const [showAccessCodeModal, setShowAccessCodeModal] = useState(false);
 
   // Data states
   const [emails, setEmails] = useState([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [analyzingId, setAnalyzingId] = useState(null);
-  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
-  
-  // Modals & Panels
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [syncMessage, setSyncMessage] = useState('');
+
+  // Calendar & Popups
   const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' | 'inbox'
   const [selectedEmail, setSelectedEmail] = useState(null);
   const [dayModalDate, setDayModalDate] = useState(null);
+  const [emailModal, setEmailModal] = useState(null); // Full email view popup
 
-  // Save access code to local storage
-  const saveCode = (code) => {
-    setAccessCode(code);
-    localStorage.setItem('hermes_access_code', code);
-  };
-
-  // Handle OAuth Token from redirect query params
+  // Handle OAuth Token on redirect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get('token');
@@ -90,7 +77,6 @@ export default function App() {
   };
 
   const fetchEmails = async () => {
-    if (!token) return;
     setLoading(true);
     try {
       const res = await axios.get(`${API_BASE}/emails/`, {
@@ -98,94 +84,44 @@ export default function App() {
           account_email: selectedAccount,
           category: selectedCategory,
           q: searchQuery,
-          limit: 150
+          limit: 200
         },
-        headers: { Authorization: `Bearer ${token}` }
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
       setEmails(res.data.emails || []);
-    } catch (err) {
-      console.error(err);
-      if (err.response?.status === 401) {
-        handleLogout();
+      if (res.data.emails?.length > 0 && !selectedEmail) {
+        setSelectedEmail(res.data.emails[0]);
       }
+    } catch (err) {
+      console.error('Error fetching cached emails', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const syncInbox = async () => {
+  // Sync latest mails: AI analysis runs automatically upon fetching and stores in DB
+  const syncLatestMails = async () => {
     setSyncing(true);
+    setSyncMessage('');
     try {
-      await axios.post(`${API_BASE}/emails/sync`, {
+      const res = await axios.post(`${API_BASE}/emails/sync`, {
         account_email: selectedAccount,
-        max_results: 30
+        max_results: 25
       }, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
+      setSyncMessage(res.data.message || 'Synced successfully');
       await fetchEmails();
       await fetchAccounts();
+      setTimeout(() => setSyncMessage(''), 4000);
     } catch (err) {
-      alert('Sync failed: ' + (err.response?.data?.detail || err.message));
+      alert('Sync error: ' + (err.response?.data?.detail || err.message));
     } finally {
       setSyncing(false);
     }
   };
 
-  const analyzeSingleEmail = async (id) => {
-    if (!accessCode) {
-      setShowAccessCodeModal(true);
-      return;
-    }
-    setAnalyzingId(id);
-    try {
-      const res = await axios.post(`${API_BASE}/emails/${id}/analyze`, {
-        access_code: accessCode
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setEmails(prev => prev.map(e => (e.id === id ? res.data.email : e)));
-      if (selectedEmail?.id === id) {
-        setSelectedEmail(res.data.email);
-      }
-    } catch (err) {
-      if (err.response?.status === 403) {
-        alert("Access Code denied! Please provide the valid access code 'kekuCode'.");
-        setShowAccessCodeModal(true);
-      } else {
-        alert('Analysis error: ' + (err.response?.data?.detail || err.message));
-      }
-    } finally {
-      setAnalyzingId(null);
-    }
-  };
-
-  const batchOrganize = async () => {
-    if (!accessCode) {
-      setShowAccessCodeModal(true);
-      return;
-    }
-    setBatchAnalyzing(true);
-    try {
-      const res = await axios.post(`${API_BASE}/emails/batch-organize?limit=15&account_email=${selectedAccount}`, {
-        access_code: accessCode
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      alert(res.data.message || 'Analyzed successfully!');
-      await fetchEmails();
-    } catch (err) {
-      if (err.response?.status === 403) {
-        alert("Access Code denied! Please provide 'kekuCode'.");
-        setShowAccessCodeModal(true);
-      } else {
-        alert('Batch organize failed: ' + (err.response?.data?.detail || err.message));
-      }
-    } finally {
-      setBatchAnalyzing(false);
-    }
-  };
-
-  const handleLogin = async () => {
+  const handleConnectGmail = async () => {
     try {
       const res = await axios.get(`${API_BASE}/auth/login`);
       if (res.data?.url) {
@@ -196,18 +132,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('hermes_token');
-    setToken('');
-    setEmails([]);
-  };
-
   useEffect(() => {
-    if (token) {
-      fetchAccounts();
-      fetchEmails();
-    }
-  }, [token, selectedAccount, selectedCategory]);
+    fetchAccounts();
+    fetchEmails();
+  }, [selectedAccount, selectedCategory]);
 
   // Calendar calculations
   const year = currentMonthDate.getFullYear();
@@ -255,28 +183,10 @@ export default function App() {
     return found ? found.color : '#94a3b8';
   };
 
-  // Login view
-  if (!token) {
-    return (
-      <div style={styles.loginContainer}>
-        <div style={styles.loginCard}>
-          <div style={styles.loginIconWrapper}>
-            <Sparkles size={36} color="#c084fc" />
-          </div>
-          <h1 style={styles.loginTitle}>Hermes</h1>
-          <p style={styles.loginSubtitle}>
-            Your cozy AI-powered multi-account email organizer. Effortlessly filter school, jobs, competitions, and actions onto an intelligent calendar.
-          </p>
-          <button onClick={handleLogin} style={styles.primaryBtn}>
-            <Mail size={18} /> Connect Gmail Account
-          </button>
-          <div style={styles.loginFooterBadge}>
-            <KeyRound size={14} color="#a855f7" /> Protected by gatekeeper code: <strong>kekuCode</strong>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Direct Gmail link for an email thread/message
+  const getGmailWebLink = (email) => {
+    return `https://mail.google.com/mail/u/${encodeURIComponent(email.account_email)}/#all/${email.thread_id || email.id}`;
+  };
 
   const selectedDayEmails = dayModalDate ? (eventsByDate[dayModalDate] || []) : [];
 
@@ -296,7 +206,7 @@ export default function App() {
           <Search size={16} color="#94a3b8" />
           <input
             type="text"
-            placeholder="Search emails, companies (e.g. Google, Tesla), competitions..."
+            placeholder="Search all emails, companies (e.g. Google, Tesla), competitions..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && fetchEmails()}
@@ -304,7 +214,7 @@ export default function App() {
           />
         </div>
 
-        {/* Account Selector (Multi-account integration) */}
+        {/* Multi-Account Selector & Actions */}
         <div style={styles.navRight}>
           <div style={styles.accountSelectorBox}>
             <select
@@ -317,29 +227,30 @@ export default function App() {
                 <option key={acc.email} value={acc.email}>{acc.email}</option>
               ))}
             </select>
-            <button onClick={handleLogin} style={styles.addAccountBtn} title="Connect another account (e.g. school or personal)">
-              <Plus size={14} /> Add Account
+            <button onClick={handleConnectGmail} style={styles.addAccountBtn} title="Connect another email (personal/school)">
+              <Plus size={14} /> Add Email
             </button>
           </div>
 
           <button
-            onClick={() => setShowAccessCodeModal(true)}
-            style={styles.codePillBtn}
-            title="Set AI Access Code"
+            onClick={syncLatestMails}
+            disabled={syncing}
+            style={styles.syncBtn}
+            title="Fetch new unread emails and auto-summarize with Gemini"
           >
-            <KeyRound size={15} color="#c084fc" />
-            <span style={{ fontSize: '0.78rem', color: '#e2e8f0' }}>Code: {accessCode ? '••••' : 'Set'}</span>
-          </button>
-
-          <button onClick={syncInbox} disabled={syncing} style={styles.iconBtn} title="Sync new emails to local DB">
-            <RefreshCw size={16} className={syncing ? 'spin' : ''} />
-          </button>
-
-          <button onClick={handleLogout} style={styles.iconBtn} title="Sign Out">
-            <LogOut size={16} />
+            <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+            <span>{syncing ? 'Fetching & Analyzing...' : 'Sync Mails'}</span>
           </button>
         </div>
       </nav>
+
+      {/* Sync Status Banner */}
+      {syncMessage && (
+        <div style={styles.syncBanner}>
+          <CheckCircle2 size={16} color="#10b981" />
+          <span>{syncMessage}</span>
+        </div>
+      )}
 
       {/* Category Filter Pills & Mode Switcher */}
       <div style={styles.filterBar}>
@@ -364,35 +275,37 @@ export default function App() {
           })}
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={styles.viewToggleGroup}>
           <button
-            onClick={batchOrganize}
-            disabled={batchAnalyzing}
-            style={styles.aiOrganizeBtn}
+            onClick={() => setActiveTab('calendar')}
+            style={activeTab === 'calendar' ? styles.viewBtnActive : styles.viewBtn}
           >
-            <Sparkles size={15} className={batchAnalyzing ? 'spin' : ''} />
-            {batchAnalyzing ? 'Organizing with Gemini...' : 'Organize with Gemini'}
+            <CalendarIcon size={15} /> Calendar
           </button>
-
-          <div style={styles.viewToggleGroup}>
-            <button
-              onClick={() => setActiveTab('calendar')}
-              style={activeTab === 'calendar' ? styles.viewBtnActive : styles.viewBtn}
-            >
-              <CalendarIcon size={15} /> Calendar
-            </button>
-            <button
-              onClick={() => setActiveTab('inbox')}
-              style={activeTab === 'inbox' ? styles.viewBtnActive : styles.viewBtn}
-            >
-              <Mail size={15} /> Messages ({emails.length})
-            </button>
-          </div>
+          <button
+            onClick={() => setActiveTab('inbox')}
+            style={activeTab === 'inbox' ? styles.viewBtnActive : styles.viewBtn}
+          >
+            <Mail size={15} /> Messages ({emails.length})
+          </button>
         </div>
       </div>
 
       {/* Main Content Area */}
       <main style={styles.mainContainer}>
+        {accounts.length === 0 && emails.length === 0 && (
+          <div style={styles.welcomeCard}>
+            <Sparkles size={40} color="#c084fc" style={{ marginBottom: 16 }} />
+            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#fff' }}>Welcome to Hermes</h2>
+            <p style={{ color: '#94a3b8', maxWidth: '440px', margin: '8px auto 24px', lineHeight: 1.6 }}>
+              Connect your personal and school Gmail accounts once. Hermes will permanently store, organize, and categorize your communications automatically.
+            </p>
+            <button onClick={handleConnectGmail} style={styles.primaryBtn}>
+              <Mail size={18} /> Connect Gmail Account
+            </button>
+          </div>
+        )}
+
         {activeTab === 'calendar' ? (
           <div style={styles.calendarCard}>
             {/* Calendar Controls */}
@@ -402,7 +315,7 @@ export default function App() {
                   {monthNames[month]} <span style={{ color: '#94a3b8', fontWeight: 400 }}>{year}</span>
                 </h2>
                 <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '2px' }}>
-                  Showing {emails.length} cached emails organized across personal & school inboxes
+                  {emails.length} organized emails cached across personal & school inboxes
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -455,11 +368,16 @@ export default function App() {
                         return (
                           <div
                             key={idx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEmailModal(email);
+                            }}
                             style={{
                               ...styles.dayEventPill,
                               borderLeftColor: col,
                               backgroundColor: `${col}18`
                             }}
+                            title={`${email.subject} (Click to read)`}
                           >
                             <span style={{ color: '#fff', fontSize: '0.72rem', fontWeight: 500 }}>
                               {email.subject || 'No Subject'}
@@ -477,12 +395,12 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* Inbox View with side-by-side reading */
+          /* Messages Inbox Split View */
           <div style={styles.inboxLayout}>
             <div style={styles.inboxListCol}>
               <div style={styles.inboxColHead}>
                 <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>Indexed Messages ({emails.length})</span>
-                <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Cached in SQLite</span>
+                <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Cached permanently</span>
               </div>
               <div style={styles.inboxScrollList}>
                 {emails.map(email => {
@@ -535,33 +453,27 @@ export default function App() {
                         From: <span style={{ color: '#e2e8f0' }}>{selectedEmail.sender}</span> &bull; {selectedEmail.account_email}
                       </div>
                     </div>
-                    <div>
-                      {!selectedEmail.analyzed ? (
-                        <button
-                          onClick={() => analyzeSingleEmail(selectedEmail.id)}
-                          disabled={analyzingId === selectedEmail.id}
-                          style={styles.aiOrganizeBtn}
-                        >
-                          <Sparkles size={14} className={analyzingId === selectedEmail.id ? 'spin' : ''} />
-                          {analyzingId === selectedEmail.id ? 'Analyzing...' : 'Analyze with Gemini'}
-                        </button>
-                      ) : (
-                        <span style={styles.analyzedPill}>
-                          <CheckCircle2 size={14} /> Analyzed
-                        </span>
-                      )}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <a
+                        href={getGmailWebLink(selectedEmail)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={styles.openGmailBtn}
+                      >
+                        <ExternalLink size={14} /> Open in Gmail
+                      </a>
                     </div>
                   </div>
 
-                  {/* Gemini Summary Box */}
-                  {selectedEmail.analyzed && (
+                  {/* Gemini Summary Box (always displayed since AI summarizes on fetch) */}
+                  {selectedEmail.summary && (
                     <div style={styles.aiInsightBox}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#c084fc', fontSize: '0.85rem' }}>
                           <Sparkles size={15} /> Executive Summary
                         </span>
                         <span style={{ ...styles.categoryBadge, backgroundColor: `${getCategoryColor(selectedEmail.category)}22`, color: getCategoryColor(selectedEmail.category) }}>
-                          {selectedEmail.category} &bull; {selectedEmail.priority} Priority
+                          {selectedEmail.category} &bull; {selectedEmail.priority || 'Medium'} Priority
                         </span>
                       </div>
                       <p style={{ fontSize: '0.88rem', color: '#e2e8f0', lineHeight: 1.5 }}>
@@ -569,12 +481,12 @@ export default function App() {
                       </p>
                       {selectedEmail.event_date && (
                         <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#38bdf8' }}>
-                          📅 Scheduled Deadline/Event: <strong>{selectedEmail.event_date}</strong>
+                          📅 Event / Deadline: <strong>{selectedEmail.event_date}</strong>
                         </div>
                       )}
                       {selectedEmail.suggested_reply && (
                         <div style={styles.suggestedReplyBox}>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8' }}>Suggested Reply:</span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8' }}>Suggested Quick Reply:</span>
                           <p style={{ fontStyle: 'italic', color: '#cbd5e1', fontSize: '0.82rem', marginTop: 2 }}>
                             {selectedEmail.suggested_reply}
                           </p>
@@ -590,7 +502,7 @@ export default function App() {
               ) : (
                 <div style={styles.emptyDetail}>
                   <Mail size={48} color="#475569" />
-                  <p style={{ color: '#94a3b8', marginTop: 12 }}>Select an email from the left to read and analyze</p>
+                  <p style={{ color: '#94a3b8', marginTop: 12 }}>Select an email from the left to read</p>
                 </div>
               )}
             </div>
@@ -606,7 +518,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <CalendarIcon size={18} color="#c084fc" />
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                  Events for {dayModalDate}
+                  Emails for {dayModalDate}
                 </h3>
               </div>
               <button onClick={() => setDayModalDate(null)} style={styles.closeBtn}>
@@ -624,15 +536,23 @@ export default function App() {
                   {selectedDayEmails.map((email) => {
                     const col = getCategoryColor(email.category);
                     return (
-                      <div key={email.id} style={{ ...styles.modalEmailCard, borderLeftColor: col }}>
+                      <div
+                        key={email.id}
+                        style={{ ...styles.modalEmailCard, borderLeftColor: col }}
+                        onClick={() => {
+                          setDayModalDate(null);
+                          setEmailModal(email);
+                        }}
+                      >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                           <span style={{ ...styles.categoryBadge, backgroundColor: `${col}22`, color: col }}>
                             {email.category || 'General'}
                           </span>
                           <span style={styles.accountBadge}>{email.account_email}</span>
                         </div>
-                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#f8fafc', margin: '6px 0 4px' }}>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#f8fafc', margin: '6px 0 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
                           {email.subject}
+                          <ArrowUpRight size={14} color="#94a3b8" />
                         </h4>
                         <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginBottom: 6 }}>
                           From: {email.sender}
@@ -641,14 +561,6 @@ export default function App() {
                           <p style={{ fontSize: '0.82rem', color: '#cbd5e1', lineHeight: 1.4 }}>
                             {email.summary}
                           </p>
-                        )}
-                        {!email.analyzed && (
-                          <button
-                            onClick={() => analyzeSingleEmail(email.id)}
-                            style={{ ...styles.aiOrganizeBtn, marginTop: 8, alignSelf: 'flex-start' }}
-                          >
-                            <Sparkles size={13} /> Analyze with Gemini
-                          </button>
                         )}
                       </div>
                     );
@@ -660,39 +572,55 @@ export default function App() {
         </div>
       )}
 
-      {/* Access Code Modal */}
-      {showAccessCodeModal && (
-        <div style={styles.modalBackdrop} onClick={() => setShowAccessCodeModal(false)}>
-          <div style={styles.modalCard} onClick={e => e.stopPropagation()}>
+      {/* Full Email Modal View */}
+      {emailModal && (
+        <div style={styles.modalBackdrop} onClick={() => setEmailModal(null)}>
+          <div style={{ ...styles.modalCard, maxWidth: '750px', maxHeight: '85vh' }} onClick={e => e.stopPropagation()}>
             <div style={styles.modalHead}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <KeyRound size={18} color="#c084fc" />
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                  Hermes AI Access Code
+              <div style={{ flex: 1, paddingRight: 16 }}>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
+                  {emailModal.subject}
                 </h3>
+                <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: 4 }}>
+                  From: <span style={{ color: '#f1f5f9' }}>{emailModal.sender}</span> &bull; {emailModal.account_email} &bull; {emailModal.date_str}
+                </div>
               </div>
-              <button onClick={() => setShowAccessCodeModal(false)} style={styles.closeBtn}>
-                <X size={18} />
-              </button>
-            </div>
-            <div style={styles.modalBody}>
-              <p style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: 1.5, marginBottom: 16 }}>
-                AI features (categorization, task extraction, summary) require the private authorization code to prevent unauthorized LLM consumption.
-              </p>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  placeholder="Enter code (default: kekuCode)"
-                  value={accessCode}
-                  onChange={(e) => saveCode(e.target.value)}
-                  style={styles.codeInput}
-                />
-                <button
-                  onClick={() => setShowAccessCodeModal(false)}
-                  style={styles.primaryBtn}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <a
+                  href={getGmailWebLink(emailModal)}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={styles.openGmailBtn}
                 >
-                  Save Code
+                  <ExternalLink size={14} /> Open in Gmail
+                </a>
+                <button onClick={() => setEmailModal(null)} style={styles.closeBtn}>
+                  <X size={18} />
                 </button>
+              </div>
+            </div>
+
+            <div style={{ ...styles.modalBody, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Summary Block */}
+              {emailModal.summary && (
+                <div style={styles.aiInsightBox}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#c084fc', fontSize: '0.82rem' }}>
+                      <Sparkles size={14} /> Executive Summary
+                    </span>
+                    <span style={{ ...styles.categoryBadge, backgroundColor: `${getCategoryColor(emailModal.category)}22`, color: getCategoryColor(emailModal.category) }}>
+                      {emailModal.category} &bull; {emailModal.priority || 'Medium'} Priority
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '0.88rem', color: '#e2e8f0', lineHeight: 1.5 }}>
+                    {emailModal.summary}
+                  </p>
+                </div>
+              )}
+
+              {/* Entire Content */}
+              <div style={styles.emailBodyPreview}>
+                {emailModal.body || emailModal.snippet || '(No content available)'}
               </div>
             </div>
           </div>
@@ -702,7 +630,6 @@ export default function App() {
   );
 }
 
-// Cozy, soft, modern dark styles
 const styles = {
   appWrapper: {
     minHeight: '100vh',
@@ -710,46 +637,16 @@ const styles = {
     flexDirection: 'column',
     color: 'var(--text-main)'
   },
-  loginContainer: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '24px'
-  },
-  loginCard: {
-    maxWidth: '460px',
-    width: '100%',
+  welcomeCard: {
     backgroundColor: 'var(--card-bg)',
     backdropFilter: 'blur(20px)',
     border: '1px solid var(--card-border)',
     borderRadius: 'var(--radius-lg)',
-    padding: '44px 36px',
+    padding: '48px 24px',
     textAlign: 'center',
+    maxWidth: '560px',
+    margin: '40px auto',
     boxShadow: 'var(--shadow-cozy)'
-  },
-  loginIconWrapper: {
-    width: '64px',
-    height: '64px',
-    borderRadius: '20px',
-    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    margin: '0 auto 20px',
-    boxShadow: 'var(--shadow-glow)'
-  },
-  loginTitle: {
-    fontSize: '2rem',
-    fontWeight: 700,
-    marginBottom: '8px',
-    color: '#fff'
-  },
-  loginSubtitle: {
-    color: 'var(--text-muted)',
-    fontSize: '0.92rem',
-    lineHeight: 1.6,
-    marginBottom: '28px'
   },
   primaryBtn: {
     display: 'inline-flex',
@@ -764,19 +661,8 @@ const styles = {
     fontWeight: 600,
     border: 'none',
     cursor: 'pointer',
-    transition: 'all 0.15s ease',
     boxShadow: '0 4px 16px rgba(168, 85, 247, 0.35)'
   },
-  loginFooterBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '6px',
-    marginTop: '24px',
-    fontSize: '0.78rem',
-    color: 'var(--text-muted)'
-  },
-
-  // Navbar
   nav: {
     padding: '14px 28px',
     borderBottom: '1px solid var(--card-border)',
@@ -867,30 +753,30 @@ const styles = {
     padding: '4px 8px',
     cursor: 'pointer'
   },
-  codePillBtn: {
+  syncBtn: {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    border: '1px solid var(--card-border)',
+    padding: '8px 14px',
     borderRadius: 'var(--radius-md)',
-    padding: '8px 12px',
+    backgroundColor: 'rgba(168, 85, 247, 0.16)',
+    border: '1px solid rgba(168, 85, 247, 0.35)',
+    color: '#c084fc',
+    fontSize: '0.82rem',
+    fontWeight: 600,
     cursor: 'pointer'
   },
-  iconBtn: {
-    width: '36px',
-    height: '36px',
-    borderRadius: '10px',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    border: '1px solid var(--card-border)',
-    color: '#94a3b8',
+  syncBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderBottom: '1px solid rgba(16, 185, 129, 0.3)',
+    color: '#6ee7b7',
+    padding: '8px 24px',
+    fontSize: '0.82rem',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer'
+    gap: '8px',
+    justifyContent: 'center'
   },
-
-  // Category Filter Bar
   filterBar: {
     padding: '12px 28px',
     display: 'flex',
@@ -916,19 +802,6 @@ const styles = {
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'all 0.15s ease'
-  },
-  aiOrganizeBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    padding: '7px 14px',
-    borderRadius: '10px',
-    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-    border: '1px solid rgba(168, 85, 247, 0.35)',
-    color: '#c084fc',
-    fontSize: '0.8rem',
-    fontWeight: 600,
-    cursor: 'pointer'
   },
   viewToggleGroup: {
     display: 'flex',
@@ -963,8 +836,6 @@ const styles = {
     fontWeight: 500,
     cursor: 'pointer'
   },
-
-  // Main Container
   mainContainer: {
     flex: 1,
     padding: '20px 28px',
@@ -1082,15 +953,14 @@ const styles = {
     borderLeft: '2px solid',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
-    textOverflow: 'ellipsis'
+    textOverflow: 'ellipsis',
+    cursor: 'pointer'
   },
   moreItemsText: {
     fontSize: '0.68rem',
     color: '#94a3b8',
     paddingLeft: '4px'
   },
-
-  // Inbox Split
   inboxLayout: {
     display: 'grid',
     gridTemplateColumns: 'minmax(320px, 420px) 1fr',
@@ -1166,16 +1036,18 @@ const styles = {
     paddingBottom: '16px',
     borderBottom: '1px solid var(--card-border)'
   },
-  analyzedPill: {
+  openGmailBtn: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '4px',
-    fontSize: '0.78rem',
-    fontWeight: 600,
-    color: '#10b981',
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    gap: '6px',
     padding: '6px 12px',
-    borderRadius: '999px'
+    borderRadius: '8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    border: '1px solid var(--card-border)',
+    color: '#c084fc',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    textDecoration: 'none'
   },
   aiInsightBox: {
     backgroundColor: 'rgba(168, 85, 247, 0.08)',
@@ -1210,15 +1082,13 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center'
   },
-
-  // Modal
   modalBackdrop: {
     position: 'fixed',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     backdropFilter: 'blur(8px)',
     display: 'flex',
     alignItems: 'center',
@@ -1230,7 +1100,7 @@ const styles = {
     backgroundColor: '#121620',
     border: '1px solid var(--card-border)',
     borderRadius: 'var(--radius-lg)',
-    maxWidth: '550px',
+    maxWidth: '560px',
     width: '100%',
     maxHeight: '80vh',
     display: 'flex',
@@ -1259,16 +1129,8 @@ const styles = {
     border: '1px solid var(--card-border)',
     borderLeft: '4px solid',
     borderRadius: 'var(--radius-md)',
-    padding: '14px'
-  },
-  codeInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    border: '1px solid var(--card-border)',
-    borderRadius: 'var(--radius-md)',
-    padding: '12px 16px',
-    color: '#fff',
-    outline: 'none',
-    fontSize: '0.9rem'
+    padding: '14px',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease'
   }
 };

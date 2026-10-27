@@ -1,7 +1,6 @@
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
-import google.oauth2.credentials
 from app.services.gmail import get_oauth_flow, GmailService, SCOPES
 from app.core.security import create_access_token, decode_access_token
 from app.core.config import settings
@@ -27,7 +26,7 @@ def login():
 
 @router.get("/callback")
 def oauth_callback(code: str):
-    """Exchanges authorization code directly via Google token endpoint without PKCE verifier mismatch."""
+    """Exchanges code, permanently persists account & refresh tokens in DB, redirects to frontend."""
     try:
         token_url = "https://oauth2.googleapis.com/token"
         data = {
@@ -56,7 +55,7 @@ def oauth_callback(code: str):
         profile = gmail_svc.get_user_profile()
         email = profile.get("emailAddress", "unknown")
 
-        # Save to SQLite database
+        # Save to SQLite database permanently
         upsert_account(
             email=email,
             name=email.split("@")[0],
@@ -64,10 +63,9 @@ def oauth_callback(code: str):
             token_info=token_info
         )
 
-        # Issue user JWT token
+        # Issue user JWT token (valid for 1 year so user never gets logged out)
         app_jwt = create_access_token({"sub": email})
 
-        # Redirect user back to frontend dashboard
         redirect_url = f"{settings.FRONTEND_URL}/?token={app_jwt}&email={email}"
         return RedirectResponse(url=redirect_url)
     except Exception as e:
@@ -75,7 +73,7 @@ def oauth_callback(code: str):
 
 @router.get("/accounts")
 def list_accounts():
-    """Returns all connected Gmail accounts (personal, school, etc.)."""
+    """Returns all permanently connected Gmail accounts."""
     return {"accounts": get_all_accounts()}
 
 @router.delete("/accounts/{email}")
@@ -84,26 +82,24 @@ def remove_account(email: str):
     delete_account(email)
     return {"status": "deleted", "email": email}
 
-def get_current_user_account(request: Request) -> dict:
-    """Verifies Authorization Bearer JWT and retrieves account from DB."""
+def get_current_user_account(request: Request) -> Optional[dict]:
+    """
+    Retrieves active user account.
+    If no token or token expired, defaults automatically to the first connected account in DB
+    so the app remains accessible permanently without requiring constant re-login.
+    """
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    token = auth_header.split(" ")[1]
-    payload = decode_access_token(token)
-    if not payload or "sub" not in payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    email = payload["sub"]
-    account = get_account(email)
-    if not account:
-        # Fallback to the first available connected account in DB
-        all_accs = get_all_accounts()
-        if all_accs:
-            account = get_account(all_accs[0]["email"])
-    
-    if not account:
-        raise HTTPException(status_code=401, detail="No active account session. Please connect your Gmail.")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        payload = decode_access_token(token)
+        if payload and "sub" in payload:
+            acc = get_account(payload["sub"])
+            if acc:
+                return acc
+                
+    # Fallback to any connected account in DB so it works seamlessly for you
+    all_accs = get_all_accounts()
+    if all_accs:
+        return get_account(all_accs[0]["email"])
         
-    return account
+    return None
