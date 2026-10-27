@@ -729,7 +729,7 @@ export default function App() {
 
               {/* Intelligence Summary & Highlights */}
               <div style={styles.aiInsightBox}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#fafafa', fontSize: '0.82rem' }}>
                     <Sparkles size={13} /> Executive Summary
                   </span>
@@ -741,21 +741,30 @@ export default function App() {
                   {emailModal.summary || emailModal.snippet}
                 </p>
 
-                {/* Key Details extracted by AI */}
-                {emailModal.key_details && emailModal.key_details.length > 0 && (
-                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <span style={styles.subBlockLabel}>Key Details</span>
-                    <ul style={styles.detailBullets}>
-                      {emailModal.key_details.map((point, idx) => (
-                        <li key={idx}>{point}</li>
+                {/* Key Dates & Deadlines in Clean Date: Format */}
+                {((emailModal.important_dates && emailModal.important_dates.length > 0) || emailModal.event_date) && (
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={styles.subBlockLabel}>Dates & Deadlines</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
+                      {emailModal.event_date && (
+                        <div style={styles.dateRowItem}>
+                          <span style={styles.dateRowLabel}>Calendar Date:</span>
+                          <span style={styles.dateRowVal}>{emailModal.event_date}</span>
+                        </div>
+                      )}
+                      {(emailModal.important_dates || []).map((dt, idx) => (
+                        <div key={idx} style={styles.dateRowItem}>
+                          <span style={styles.dateRowLabel}>Date:</span>
+                          <span style={styles.dateRowVal}>{dt}</span>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
 
-                {/* Extracted Actionable Links */}
+                {/* Important Links */}
                 {emailModal.important_links && emailModal.important_links.length > 0 && (
-                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <span style={styles.subBlockLabel}>Important Action Links</span>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
                       {emailModal.important_links.map((linkObj, idx) => (
@@ -766,24 +775,22 @@ export default function App() {
                           rel="noreferrer"
                           style={styles.actionPillLink}
                         >
-                          <Link size={12} /> {linkObj.label || 'Link'}
+                          <Link size={12} /> {linkObj.label || linkObj.url}
                         </a>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Extracted Important Dates */}
-                {emailModal.important_dates && emailModal.important_dates.length > 0 && (
-                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <span style={styles.subBlockLabel}>Key Dates & Deadlines</span>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                      {emailModal.important_dates.map((dt, idx) => (
-                        <span key={idx} style={styles.datePill}>
-                          <Clock size={11} /> {dt}
-                        </span>
+                {/* Key Details */}
+                {emailModal.key_details && emailModal.key_details.length > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={styles.subBlockLabel}>Key Details</span>
+                    <ul style={styles.detailBullets}>
+                      {emailModal.key_details.map((point, idx) => (
+                        <li key={idx}>{point}</li>
                       ))}
-                    </div>
+                    </ul>
                   </div>
                 )}
               </div>
@@ -888,7 +895,47 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
+              {/* Reset Database Section */}
+              <div style={{ paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f87171', marginBottom: 4 }}>
+                  Reset Stored Emails Database
+                </h4>
+                <p style={{ fontSize: '0.78rem', color: '#71717a', marginBottom: 10 }}>
+                  Clears all indexed emails from the database so you can sync fresh and re-run updated AI intelligence.
+                </p>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm("Are you sure you want to clear all stored emails from the database? Connected accounts will remain.")) return;
+                    try {
+                      await axios.post(`${API_BASE}/emails/reset-database`, {}, {
+                        headers: token ? { Authorization: `Bearer ${token}` } : {}
+                      });
+                      setEmails([]);
+                      setEmailModal(null);
+                      setDayModalDate(null);
+                      alert("Database cleared! Click 'Sync Latest Mails' to perform a fresh AI sync.");
+                    } catch (err) {
+                      alert("Failed to reset database: " + (err.response?.data?.detail || err.message));
+                    }
+                  }}
+                  style={{ ...styles.cancelBtn, backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                >
+                  <Trash2 size={13} style={{ display: 'inline', marginRight: 6 }} /> Reset Emails Database
+                </button>
+              </div>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false);
+                      setCategoryModal({ id: '', label: '', description: '', color: '#a1a1aa' });
+                    }}
+                    style={styles.addBtn}
+                  >
+                    <Plus size={13} /> New Category
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Manage Categories Section */}
+              <div style={{ paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fafafa' }}>
                     Categories & AI Filter Guidance
@@ -1491,6 +1538,23 @@ const styles = {
     color: '#fff',
     fontSize: '0.75rem',
     textDecoration: 'none',
+    fontWeight: 500
+  },
+  dateRowItem: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    fontSize: '0.8rem',
+    color: '#e4e4e7'
+  },
+  dateRowLabel: {
+    fontSize: '0.74rem',
+    fontWeight: 600,
+    color: '#a1a1aa',
+    minWidth: '90px'
+  },
+  dateRowVal: {
+    color: '#38bdf8',
     fontWeight: 500
   },
   datePill: {

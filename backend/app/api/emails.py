@@ -19,7 +19,8 @@ from app.core.db import (
     delete_single_email,
     delete_emails_by_category,
     update_email_flags,
-    purge_old_unstarred_emails
+    purge_old_unstarred_emails,
+    clear_all_emails
 )
 from pydantic import BaseModel
 import json
@@ -98,6 +99,12 @@ def update_app_settings(payload: SettingsPayload):
     set_setting("retention_days", str(payload.retention_days))
     purged = purge_old_unstarred_emails()
     return {"status": "ok", "retention_days": payload.retention_days, "purged_emails": purged}
+
+@router.post("/reset-database")
+def reset_emails_database(current_acc: Optional[dict] = Depends(get_current_user_account)):
+    """Clears all stored emails from the database so fresh synchronization and AI analysis can run."""
+    clear_all_emails()
+    return {"status": "ok", "message": "All emails successfully cleared from database."}
 
 @router.delete("/category/{category_name}")
 def delete_all_emails_in_category(category_name: str):

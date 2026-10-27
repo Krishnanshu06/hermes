@@ -364,6 +364,13 @@ def delete_single_email(email_id: str):
     conn.commit()
     conn.close()
 
+def clear_all_emails():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM emails")
+    conn.commit()
+    conn.close()
+
 def delete_emails_by_category(category: str):
     conn = get_connection()
     cursor = conn.cursor()
