@@ -1,10 +1,9 @@
 import json
 import logging
-import re
-from datetime import datetime
 from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 from app.core.config import settings
+from app.core.db import get_categories
 
 logger = logging.getLogger(__name__)
 
@@ -21,24 +20,27 @@ class GeminiService:
 
     def analyze_email(self, subject: str, sender: str, snippet: str, body: str, email_date: str = "") -> Dict[str, Any]:
         """
-        Specialized classification tailored to user requirements:
-        Categories:
-        - 'Internship/Job' (employer/recruiter emails, offers, rejections, interview invites, tech applications)
-        - 'Competition/Hackathon' (coding contests, datathons, case competitions, hackathons)
-        - 'Event/Academic' (school lectures, campus seminars, workshops, meetups, academic announcements)
-        - 'Action Required' (bills, urgent deadlines, signatures, critical responses)
-        - 'Promotion/Spam' (marketing flyers, store discounts, junk newsletters)
-        - 'FYI/General' (social updates, general notifications)
+        Dynamically considers user-defined categories & descriptions.
         """
-        if not self.model:
-            return self._fallback_classification(subject, snippet)
+        # Fetch current active categories from database
+        db_categories = get_categories()
+        category_guidelines = []
+        valid_cat_names = []
+        for c in db_categories:
+            valid_cat_names.append(c["id"])
+            desc = c.get("description") or "Categorize according to the title name"
+            category_guidelines.append(f'- "{c["id"]}": {desc}')
 
-        # Truncate body to save tokens and prevent exceeding context
+        categories_prompt_text = "\n".join(category_guidelines)
+        categories_list_str = " | ".join([f'"{name}"' for name in valid_cat_names])
+
+        if not self.model:
+            return self._fallback_classification(subject, snippet, valid_cat_names)
+
         clean_body = body[:2500] if body else snippet[:1000]
 
         prompt = f"""
 You are Hermes, an intelligent student and engineer email organizer.
-Current Date: {datetime.now().strftime('%Y-%m-%d')}
 Email Received Date: {email_date}
 Subject: {subject}
 Sender: {sender}
@@ -47,22 +49,18 @@ Content:
 {clean_body}
 
 Instructions:
-1. Categorize into EXACTLY one of:
-   - "Internship/Job" (employers, recruiter notes, interview invites, application confirmations, internships)
-   - "Competition/Hackathon" (hackathons, code battles, coding competitions, scholarships, project challenges)
-   - "Event/Academic" (university/school campus alerts, course notices, seminars, guest talks)
-   - "Action Required" (urgent personal to-dos, bills, forms to sign)
-   - "Promotion/Spam" (trash, generic marketing newsletters, promotional discounts)
-   - "FYI/General" (receipts, notifications, updates not needing action)
+1. Categorize into EXACTLY one of the following user categories:
+{categories_prompt_text}
+
 2. Determine Priority: "High", "Medium", or "Low"
-3. Identify relevant event_date (YYYY-MM-DD format) for a calendar if there is a deadline, interview date, competition date, or event time mentioned. If none mentioned, return null.
+3. Identify relevant event_date (YYYY-MM-DD format) for a calendar if there is a deadline, interview date, competition date, test, or event time mentioned. If none mentioned, return null.
 4. Provide a 1-sentence crystal clear executive summary.
 5. Extract action items / tasks with deadlines if any.
-6. Suggest a 1-2 sentence professional quick reply draft (or null if spam/promotion).
+6. Suggest a 1-2 sentence professional quick reply draft (or null if promotion/spam).
 
 Schema:
 {{
-  "category": "Internship/Job" | "Competition/Hackathon" | "Event/Academic" | "Action Required" | "Promotion/Spam" | "FYI/General",
+  "category": {categories_list_str},
   "priority": "High" | "Medium" | "Low",
   "event_date": "YYYY-MM-DD" or null,
   "summary": "Concise 1-sentence summary",
@@ -80,32 +78,35 @@ Return strictly valid JSON only.
         try:
             response = self.model.generate_content(prompt)
             result = json.loads(response.text)
+            # Ensure assigned category matches one in list
+            if result.get("category") not in valid_cat_names and valid_cat_names:
+                result["category"] = valid_cat_names[0]
             return result
         except Exception as e:
             logger.error(f"Error calling Gemini AI: {e}")
-            return self._fallback_classification(subject, snippet)
+            return self._fallback_classification(subject, snippet, valid_cat_names)
 
-    def _fallback_classification(self, subject: str, snippet: str) -> Dict[str, Any]:
+    def _fallback_classification(self, subject: str, snippet: str, valid_cat_names: List[str]) -> Dict[str, Any]:
         text = f"{subject} {snippet}".lower()
-        if any(w in text for w in ["interview", "application", "internship", "offer", "recruiter", "careers"]):
-            category = "Internship/Job"
-            priority = "High"
-        elif any(w in text for w in ["hackathon", "competition", "contest", "challenge", "devpost"]):
-            category = "Competition/Hackathon"
-            priority = "High"
-        elif any(w in text for w in ["assignment", "lecture", "exam", "course", "campus", "professor", "university"]):
-            category = "Event/Academic"
-            priority = "Medium"
-        elif any(w in text for w in ["sale", "discount", "off", "unsubscribe", "deal", "promo"]):
-            category = "Promotion/Spam"
-            priority = "Low"
+        if "internship" in text or "interview" in text:
+            cat = "Internship/Job"
+        elif "hackathon" in text or "contest" in text:
+            cat = "Competition/Hackathon"
+        elif "assignment" in text or "lecture" in text or "course" in text:
+            cat = "Event/Academic"
+        elif "urgent" in text or "bill" in text:
+            cat = "Action Required"
+        elif "sale" in text or "discount" in text or "unsubscribe" in text:
+            cat = "Promotion/Spam"
         else:
-            category = "FYI/General"
-            priority = "Medium"
+            cat = "FYI/General"
+
+        if cat not in valid_cat_names and valid_cat_names:
+            cat = valid_cat_names[0]
 
         return {
-            "category": category,
-            "priority": priority,
+            "category": cat,
+            "priority": "Medium",
             "event_date": None,
             "summary": snippet[:150] or subject,
             "tasks": [],

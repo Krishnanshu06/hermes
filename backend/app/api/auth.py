@@ -1,4 +1,5 @@
 import requests
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from app.services.gmail import get_oauth_flow, GmailService, SCOPES
