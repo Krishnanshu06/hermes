@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     BACKEND_URL: str = "http://localhost:8000"
     
-    # Database path
+    # Database: Supabase PostgreSQL (or fallback to local SQLite)
+    DATABASE_URL: Optional[str] = None
     DB_PATH: str = str(Path(__file__).resolve().parent.parent / "hermes.db")
 
     class Config:
